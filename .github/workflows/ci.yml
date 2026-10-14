@@ -85,22 +85,16 @@ jobs:
           $root = Join-Path $PWD 'src-tauri/target/sherpa-onnx-prebuilt'
           $archive = Get-ChildItem -LiteralPath $root -Filter '*.tar.bz2' -File | Select-Object -First 1
           if (-not $archive) { throw 'Downloaded archive is missing' }
-          $tar = (Get-Command tar.exe -ErrorAction Stop).Source
-          Write-Host "[extract] Archive: $($archive.FullName); tool: $tar"
+          $sevenZip = (Get-Command 7z.exe -ErrorAction Stop).Source
+          Write-Host "[extract] Archive: $($archive.FullName); tool: $sevenZip"
           $watch = [Diagnostics.Stopwatch]::StartNew()
-          $stdout = Join-Path $root 'tar-stdout.txt'
-          $stderr = Join-Path $root 'tar-stderr.txt'
-          $process = Start-Process -FilePath $tar -ArgumentList @('-xjf', $archive.FullName, '-C', $root) -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
-          while (-not $process.HasExited) {
-            $files = @(Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -ne '.bz2' })
-            $bytes = ($files | Measure-Object -Property Length -Sum).Sum
-            Write-Host "[extract] $($watch.Elapsed.TotalSeconds.ToString('F0')) seconds; $($files.Count) files; $([math]::Round($bytes / 1MB, 1)) MiB; tar CPU $($process.TotalProcessorTime.TotalSeconds.ToString('F1')) seconds"
-            Start-Sleep -Seconds 15
-            $process.Refresh()
-          }
-          Get-Content -LiteralPath $stdout
-          Get-Content -LiteralPath $stderr
-          if ($process.ExitCode -ne 0) { throw "tar failed: exit $($process.ExitCode)" }
+          & $sevenZip x $archive.FullName "-o$root" -y -bsp1
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to decompress the bzip2 layer' }
+          $tarArchive = Get-ChildItem -LiteralPath $root -Filter '*.tar' -File | Select-Object -First 1
+          if (-not $tarArchive) { throw 'The decompressed tar archive is missing' }
+          Write-Host "[extract] Unpacking tar contents after $($watch.Elapsed.TotalSeconds.ToString('F1')) seconds"
+          & $sevenZip x $tarArchive.FullName "-o$root" -y -bsp1
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to extract the tar contents' }
           Write-Host '[extract] Checking the extracted libraries with the upstream preparation script'
           & $script
           if (-not (Select-String -LiteralPath $env:GITHUB_ENV -Pattern '^SHERPA_ONNX_LIB_DIR=' -Quiet)) {
@@ -158,7 +152,7 @@ jobs:
           This preview uses the standard OpenLess user-data and credential locations.
           It is for a short manual UI check; it is not an installer or a new release.
           '@ | Set-Content -Encoding utf8 (Join-Path $output 'README.txt')
-          Get-ChildItem -LiteralPath $output -File | ForEach-Object {
+          Get-ChildItem -LiteralPath $output -File | Where-Object Name -ne 'SHA256SUMS.txt' | ForEach-Object {
             $hash = Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256
             "$($hash.Hash.ToLowerInvariant())  $($_.Name)"
           } | Set-Content -Encoding ascii (Join-Path $output 'SHA256SUMS.txt')
