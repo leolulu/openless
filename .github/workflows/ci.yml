@@ -26,7 +26,7 @@ jobs:
       - name: Verify source revision
         working-directory: .
         run: |
-          $expected = 'a47b5d7fbfd53e7f53b0298290e143ff51cb7bc5'
+          $expected = '2068b2d67c57696aa5e2f1166d91f7ce4e888810'
           git merge-base --is-ancestor $expected HEAD
           if ($LASTEXITCODE -ne 0) { throw 'Unexpected source revision' }
           $changed = @(git diff --name-only $expected HEAD)
@@ -143,7 +143,7 @@ jobs:
           $info = [ordered]@{
             repository = 'leolulu/openless'
             pr = 'https://github.com/Open-Less/openless/pull/1160'
-            sourceCommit = 'a47b5d7fbfd53e7f53b0298290e143ff51cb7bc5'
+            sourceCommit = '2068b2d67c57696aa5e2f1166d91f7ce4e888810'
             workflowCommit = $env:GITHUB_SHA
             runUrl = "https://github.com/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID"
             build = 'Windows x64 native Tauri debug build with embedded frontend; no installer'
