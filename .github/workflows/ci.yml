@@ -48,11 +48,58 @@ jobs:
         with:
           workspaces: openless-all/app/src-tauri -> target
           shared-key: pr-1160-windows-preview
-      - name: Prepare Windows dependencies
+      - name: Prepare Windows manifests
+        timeout-minutes: 5
         run: |
+          Write-Host '[prepare] Removing the macOS-only dependency from the Windows build graph'
           node scripts/ci-disable-macos-qwen3.mjs
           if ($LASTEXITCODE -ne 0) { throw 'Failed to prepare Windows manifests' }
-          ./scripts/prepare-windows-sherpa.ps1
+      - name: Download Sherpa Windows libraries
+        timeout-minutes: 8
+        run: |
+          $lock = Get-Content -LiteralPath src-tauri/Cargo.lock -Raw
+          $version = [regex]::Match($lock, '(?ms)\[\[package\]\]\r?\nname = "sherpa-onnx-sys"\r?\nversion = "([^"]+)"').Groups[1].Value
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'Missing Sherpa version' }
+          $name = "sherpa-onnx-v$version-win-x64-static-MT-Release-lib.tar.bz2"
+          $root = Join-Path $PWD 'src-tauri/target/sherpa-onnx-prebuilt'
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          $archive = Join-Path $root $name
+          $url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/v$version/$name"
+          Write-Host "[download] $url"
+          $watch = [Diagnostics.Stopwatch]::StartNew()
+          curl.exe --fail --location --retry 2 --retry-all-errors --connect-timeout 20 --max-time 120 --retry-max-time 360 --progress-bar --output $archive $url
+          if ($LASTEXITCODE -ne 0) { throw "Sherpa download failed: curl exit $LASTEXITCODE" }
+          $bytes = (Get-Item -LiteralPath $archive).Length
+          Write-Host "[download] Finished: $bytes bytes in $($watch.Elapsed.TotalSeconds.ToString('F1')) seconds"
+          if ($bytes -lt 1MB) { throw 'Sherpa archive is unexpectedly small' }
+          if ($version -eq '1.13.2') {
+            $hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($hash -ne '847a5176904d6ad1e4825b7d20ebb11bd7e9898a7596d3d4ff059f43674db031') {
+              throw 'Sherpa archive does not match the published release checksum'
+            }
+          }
+      - name: Extract Sherpa Windows libraries
+        timeout-minutes: 10
+        run: |
+          $script = (Resolve-Path ./scripts/prepare-windows-sherpa.ps1).Path
+          $root = Join-Path $PWD 'src-tauri/target/sherpa-onnx-prebuilt'
+          Write-Host '[extract] Running the upstream preparation script with the downloaded archive'
+          $watch = [Diagnostics.Stopwatch]::StartNew()
+          $job = Start-Job -ScriptBlock { param($path) & $path } -ArgumentList $script
+          while ($job.State -in @('Running', 'NotStarted')) {
+            Receive-Job $job
+            $files = @(Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -ne '.bz2' })
+            $bytes = ($files | Measure-Object -Property Length -Sum).Sum
+            Write-Host "[extract] $($watch.Elapsed.TotalSeconds.ToString('F0')) seconds; $($files.Count) files; $([math]::Round($bytes / 1MB, 1)) MiB extracted"
+            Wait-Job $job -Timeout 15 | Out-Null
+          }
+          Receive-Job $job
+          if ($job.State -ne 'Completed') { throw $job.ChildJobs[0].JobStateInfo.Reason }
+          Remove-Job $job
+          if (-not (Select-String -LiteralPath $env:GITHUB_ENV -Pattern '^SHERPA_ONNX_LIB_DIR=' -Quiet)) {
+            throw 'Sherpa library directory was not exported'
+          }
+          Write-Host "[extract] Finished in $($watch.Elapsed.TotalSeconds.ToString('F1')) seconds"
       - name: Install frontend dependencies
         run: |
           pnpm import
