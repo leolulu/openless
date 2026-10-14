@@ -83,19 +83,26 @@ jobs:
         run: |
           $script = (Resolve-Path ./scripts/prepare-windows-sherpa.ps1).Path
           $root = Join-Path $PWD 'src-tauri/target/sherpa-onnx-prebuilt'
-          Write-Host '[extract] Running the upstream preparation script with the downloaded archive'
+          $archive = Get-ChildItem -LiteralPath $root -Filter '*.tar.bz2' -File | Select-Object -First 1
+          if (-not $archive) { throw 'Downloaded archive is missing' }
+          $tar = (Get-Command tar.exe -ErrorAction Stop).Source
+          Write-Host "[extract] Archive: $($archive.FullName); tool: $tar"
           $watch = [Diagnostics.Stopwatch]::StartNew()
-          $job = Start-Job -ScriptBlock { param($path) & $path } -ArgumentList $script
-          while ($job.State -in @('Running', 'NotStarted')) {
-            Receive-Job $job
+          $stdout = Join-Path $root 'tar-stdout.txt'
+          $stderr = Join-Path $root 'tar-stderr.txt'
+          $process = Start-Process -FilePath $tar -ArgumentList @('-xjf', $archive.FullName, '-C', $root) -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          while (-not $process.HasExited) {
             $files = @(Get-ChildItem -LiteralPath $root -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.Extension -ne '.bz2' })
             $bytes = ($files | Measure-Object -Property Length -Sum).Sum
-            Write-Host "[extract] $($watch.Elapsed.TotalSeconds.ToString('F0')) seconds; $($files.Count) files; $([math]::Round($bytes / 1MB, 1)) MiB extracted"
-            Wait-Job $job -Timeout 15 | Out-Null
+            Write-Host "[extract] $($watch.Elapsed.TotalSeconds.ToString('F0')) seconds; $($files.Count) files; $([math]::Round($bytes / 1MB, 1)) MiB; tar CPU $($process.TotalProcessorTime.TotalSeconds.ToString('F1')) seconds"
+            Start-Sleep -Seconds 15
+            $process.Refresh()
           }
-          Receive-Job $job
-          if ($job.State -ne 'Completed') { throw $job.ChildJobs[0].JobStateInfo.Reason }
-          Remove-Job $job
+          Get-Content -LiteralPath $stdout
+          Get-Content -LiteralPath $stderr
+          if ($process.ExitCode -ne 0) { throw "tar failed: exit $($process.ExitCode)" }
+          Write-Host '[extract] Checking the extracted libraries with the upstream preparation script'
+          & $script
           if (-not (Select-String -LiteralPath $env:GITHUB_ENV -Pattern '^SHERPA_ONNX_LIB_DIR=' -Quiet)) {
             throw 'Sherpa library directory was not exported'
           }
