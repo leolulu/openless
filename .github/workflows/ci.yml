@@ -107,8 +107,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Failed to import the upstream lockfile' }
           pnpm install --frozen-lockfile --ignore-scripts
           if ($LASTEXITCODE -ne 0) { throw 'Failed to install dependencies' }
-          pnpm exec esbuild --version
-          if ($LASTEXITCODE -ne 0) { throw 'esbuild executable is unavailable' }
+          @'
+          const { createRequire } = require('node:module');
+          const fromVite = createRequire(require.resolve('vite'));
+          const esbuild = fromVite('esbuild');
+          esbuild.transformSync('const value: number = 1', { loader: 'ts' });
+          console.log('esbuild', esbuild.version, 'native transform passed');
+          '@ | Set-Content -Encoding utf8 .windows-preview-esbuild-check.cjs
+          node .windows-preview-esbuild-check.cjs
+          if ($LASTEXITCODE -ne 0) { throw 'The Vite esbuild native check failed' }
       - name: Build standalone Windows preview
         run: |
           @{ build = @{ beforeBuildCommand = 'pnpm run build' } } |
